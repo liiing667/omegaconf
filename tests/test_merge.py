@@ -38,7 +38,11 @@ from omegaconf._utils import (
 )
 from omegaconf.base import Node
 from omegaconf.basecontainer import _deep_update_type_hint
-from omegaconf.errors import ConfigKeyError, UnsupportedValueType
+from omegaconf.errors import (
+    ConfigKeyError,
+    ConfigTypeError,
+    UnsupportedValueType,
+)
 from omegaconf.nodes import IntegerNode
 from tests import (
     A,
@@ -1869,3 +1873,65 @@ def test_merge_structured_list_with_content_into_plain_list_preserves_element_ty
     assert result.aa[0].num == 42
     with raises(ValidationError):
         result.aa.append(123)
+
+
+@mark.parametrize("merge", [OmegaConf.merge, OmegaConf.unsafe_merge])
+@mark.parametrize("deep_first", [True, False])
+def test_merge_nested_structured_into_incompatible_plain_container(
+    merge: Any, deep_first: bool
+) -> None:
+    """Merging a nested structured config into an incompatible plain container
+    raises ConfigTypeError (a TypeError subclass) regardless of field order,
+    instead of leaking a bare TypeError from the merge internals."""
+
+    @dataclass
+    class Inner:
+        x: int = 1
+
+    @dataclass
+    class Deep:
+        inner: Inner = field(default_factory=Inner)
+
+    if deep_first:
+
+        @dataclass
+        class Config:
+            deep: Deep = field(default_factory=Deep)
+            name: str = "n"
+
+    else:
+
+        @dataclass
+        class Config:  # noqa: F811
+            name: str = "n"
+            deep: Deep = field(default_factory=Deep)
+
+    plain = OmegaConf.create({"deep": {"inner": [1, 2]}, "name": "b"})
+    structured = OmegaConf.structured(Config)
+    with raises(ConfigTypeError, match="Cannot merge incompatible container types"):
+        merge(plain, structured)
+
+
+@mark.parametrize("merge", [OmegaConf.merge, OmegaConf.unsafe_merge])
+def test_merge_incompatible_plain_container_into_nested_structured(
+    merge: Any,
+) -> None:
+    """The reverse merge direction keeps its existing ValidationError."""
+
+    @dataclass
+    class Inner:
+        x: int = 1
+
+    @dataclass
+    class Deep:
+        inner: Inner = field(default_factory=Inner)
+
+    @dataclass
+    class Config:
+        deep: Deep = field(default_factory=Deep)
+        name: str = "n"
+
+    structured = OmegaConf.structured(Config)
+    plain = OmegaConf.create({"deep": {"inner": [1, 2]}, "name": "b"})
+    with raises(ValidationError, match="list is not a subclass of Inner"):
+        merge(structured, plain)
